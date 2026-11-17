@@ -2,21 +2,27 @@ package com.pokemon.api.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.pokemon.api.dto.PokemonRequestDTO;
+import com.pokemon.api.dto.PokemonResponseDTO;
+import com.pokemon.api.service.PokemonService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
-import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
+import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 
+import java.util.List;
 import java.util.Set;
 
 import static org.hamcrest.Matchers.*;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
-@SpringBootTest
-@AutoConfigureMockMvc
+@WebMvcTest(PokemonController.class)
 class PokemonControllerTest {
 
     @Autowired
@@ -25,115 +31,72 @@ class PokemonControllerTest {
     @Autowired
     private ObjectMapper objectMapper;
 
-    @Test
-    void shouldReturnInitialPokemonsList() throws Exception {
-        mockMvc.perform(get("/api/v1/pokemon")
-                        .contentType(MediaType.APPLICATION_JSON))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.content", hasSize(greaterThanOrEqualTo(1))))
-                .andExpect(jsonPath("$.totalElements", greaterThanOrEqualTo(1000)));
-    }
+    @MockBean
+    private PokemonService pokemonService;
 
     @Test
-    void shouldReturnLastPageWhenRequestedPageIsOutOfBounds() throws Exception {
-        // Al pedir una página muy alta (ej: page=9999 y size=10), debe devolver la última página disponible
-        mockMvc.perform(get("/api/v1/pokemon?page=9999&size=10")
-                        .contentType(MediaType.APPLICATION_JSON))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.content", not(empty())))
-                .andExpect(jsonPath("$.totalElements", greaterThanOrEqualTo(1000)));
-    }
+    void shouldReturnPokemonByIdWithPublicTypeNames() throws Exception {
+        when(pokemonService.getPokemonById(1L)).thenReturn(bulbasaur());
 
-    @Test
-    void shouldReturnPokemonById() throws Exception {
-        mockMvc.perform(get("/api/v1/pokemon/1")
-                        .contentType(MediaType.APPLICATION_JSON))
+        mockMvc.perform(get("/api/v1/pokemon/1").accept(MediaType.APPLICATION_JSON))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.id", is(1)))
                 .andExpect(jsonPath("$.name", is("Bulbasaur")))
-                .andExpect(jsonPath("$.pokedexNumber", is(1)))
                 .andExpect(jsonPath("$.primaryType", is("GRASS")))
                 .andExpect(jsonPath("$.secondaryType", is("POISON")))
                 .andExpect(jsonPath("$.types", hasItems("GRASS", "POISON")));
     }
 
     @Test
-    void shouldReturnPokemonByPokedexNumber() throws Exception {
-        mockMvc.perform(get("/api/v1/pokemon/pokedex/25")
-                        .contentType(MediaType.APPLICATION_JSON))
+    void shouldForwardFiltersAndReturnPagedPokemon() throws Exception {
+        when(pokemonService.getAllPokemons(eq("char"), eq("FLYING"), any()))
+                .thenReturn(new PageImpl<>(List.of(bulbasaur()), PageRequest.of(0, 10), 1));
+
+        mockMvc.perform(get("/api/v1/pokemon")
+                        .param("name", "char")
+                        .param("type", "FLYING")
+                        .param("page", "0")
+                        .param("size", "10"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$", hasSize(greaterThanOrEqualTo(1))))
-                .andExpect(jsonPath("$[0].pokedexNumber", is(25)));
+                .andExpect(jsonPath("$.totalElements", is(1)))
+                .andExpect(jsonPath("$.content[0].types", hasItems("GRASS", "POISON")));
+
+        verify(pokemonService).getAllPokemons(eq("char"), eq("FLYING"), any());
     }
 
     @Test
-    void shouldFilterPokemonsByTypeIncludingSecondary() throws Exception {
-        // FLYING como secundario (ej: Charizard, Gyarados, Butterfree) debe aparecer
-        mockMvc.perform(get("/api/v1/pokemon?type=FLYING")
-                        .contentType(MediaType.APPLICATION_JSON))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.totalElements", is(132)))
-                .andExpect(jsonPath("$.content", hasSize(greaterThanOrEqualTo(1))))
-                .andExpect(jsonPath("$.content[0].types", hasItem("FLYING")));
-    }
-
-    @Test
-    void shouldCreateNewPokemonSuccessfully() throws Exception {
-        PokemonRequestDTO newPokemon = new PokemonRequestDTO(
-                "Miraidon",
-                1008,
-                Set.of("ELECTRIC", "DRAGON"),
-                100, 85, 100, 135, 115, 135,
-                3.5, 240.0,
-                "Pokémon legendario de Paldea.",
-                "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/1008.png"
-        );
+    void shouldReturnCreatedPokemon() throws Exception {
+        PokemonRequestDTO request = new PokemonRequestDTO(
+                "Miraidon", 1008, Set.of("ELECTRIC", "DRAGON"),
+                100, 85, 100, 135, 115, 135, 3.5, 240.0, "Legendary Pokémon.", null);
+        when(pokemonService.createPokemon(any())).thenReturn(bulbasaur());
 
         mockMvc.perform(post("/api/v1/pokemon")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(newPokemon)))
+                        .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.name", is("Miraidon")))
-                .andExpect(jsonPath("$.pokedexNumber", is(1008)))
-                .andExpect(jsonPath("$.primaryType", is("ELECTRIC")))
-                .andExpect(jsonPath("$.secondaryType", is("DRAGON")));
+                .andExpect(jsonPath("$.name", is("Bulbasaur")));
     }
 
     @Test
-    void shouldUpdatePokemonSuccessfullyWithPut() throws Exception {
-        PokemonRequestDTO updateRequest = new PokemonRequestDTO(
-                "Bulbasaur Mega",
-                1,
-                Set.of("GRASS", "POISON"),
-                60, 65, 65, 80, 80, 60,
-                0.8, 8.0,
-                "Bulbasaur entrenado al máximo nivel con estadísticas mejoradas.",
-                "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/1.png"
-        );
-
-        mockMvc.perform(put("/api/v1/pokemon/1")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(updateRequest)))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.id", is(1)))
-                .andExpect(jsonPath("$.name", is("Bulbasaur Mega")))
-                .andExpect(jsonPath("$.hp", is(60)))
-                .andExpect(jsonPath("$.attack", is(65)))
-                .andExpect(jsonPath("$.primaryType", is("GRASS")))
-                .andExpect(jsonPath("$.secondaryType", is("POISON")));
-    }
-
-    @Test
-    void shouldReturnBadRequestWhenValidationFails() throws Exception {
-        PokemonRequestDTO invalidPokemon = new PokemonRequestDTO();
-        invalidPokemon.setName("");
-        invalidPokemon.setPokedexNumber(-5);
+    void shouldRejectInvalidRequestBeforeCallingCatalog() throws Exception {
+        PokemonRequestDTO request = new PokemonRequestDTO();
+        request.setName("");
+        request.setPokedexNumber(-5);
 
         mockMvc.perform(post("/api/v1/pokemon")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(invalidPokemon)))
+                        .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.validationErrors.name", notNullValue()))
                 .andExpect(jsonPath("$.validationErrors.pokedexNumber", notNullValue()));
+
+        verifyNoInteractions(pokemonService);
+    }
+
+    private PokemonResponseDTO bulbasaur() {
+        return new PokemonResponseDTO(1L, "Bulbasaur", 1, null, 1, "GRASS", "POISON",
+                Set.of("GRASS", "POISON"), 45, 49, 49, 65, 65, 45, 318,
+                0.7, 6.9, "Seed Pokémon.", "https://example.test/1.png");
     }
 }

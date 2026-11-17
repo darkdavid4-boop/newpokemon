@@ -1,15 +1,15 @@
-package com.pokemon.api.repository;
+package com.pokemon.typecatalog.repository;
 
-import com.pokemon.api.model.PokemonType;
+import com.pokemon.typecatalog.model.PokemonType;
 import org.springframework.data.jpa.repository.JpaRepository;
-import org.springframework.stereotype.Repository;
 
 import java.util.Optional;
 
-@Repository
 public interface PokemonTypeRepository extends JpaRepository<PokemonType, Long> {
 
     Optional<PokemonType> findByNameIgnoreCase(String name);
+
+    Optional<PokemonType> findByCodeIgnoreCase(String code);
 
     boolean existsByNameIgnoreCase(String name);
 }
