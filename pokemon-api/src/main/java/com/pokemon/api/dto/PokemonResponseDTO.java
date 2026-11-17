@@ -1,8 +1,5 @@
 package com.pokemon.api.dto;
 
-import com.pokemon.api.model.Pokemon;
-
-import java.util.LinkedHashSet;
 import java.util.Set;
 
 public class PokemonResponseDTO {
@@ -54,49 +51,6 @@ public class PokemonResponseDTO {
         this.weight = weight;
         this.description = description;
         this.spriteUrl = spriteUrl;
-    }
-
-    public static PokemonResponseDTO fromEntity(Pokemon pokemon) {
-        if (pokemon == null) {
-            return null;
-        }
-
-        int total = 0;
-        if (pokemon.getHp() != null) total += pokemon.getHp();
-        if (pokemon.getAttack() != null) total += pokemon.getAttack();
-        if (pokemon.getDefense() != null) total += pokemon.getDefense();
-        if (pokemon.getSpecialAttack() != null) total += pokemon.getSpecialAttack();
-        if (pokemon.getSpecialDefense() != null) total += pokemon.getSpecialDefense();
-        if (pokemon.getSpeed() != null) total += pokemon.getSpeed();
-
-        String pType = pokemon.getPrimaryType() != null ? pokemon.getPrimaryType().getName() : null;
-        String sType = pokemon.getSecondaryType() != null ? pokemon.getSecondaryType().getName() : null;
-
-        Set<String> typeNames = new LinkedHashSet<>();
-        if (pType != null) typeNames.add(pType);
-        if (sType != null) typeNames.add(sType);
-
-        return new PokemonResponseDTO(
-                pokemon.getId(),
-                pokemon.getName(),
-                pokemon.getPokedexNumber(),
-                pokemon.getForm(),
-                pokemon.getGeneration(),
-                pType,
-                sType,
-                typeNames,
-                pokemon.getHp(),
-                pokemon.getAttack(),
-                pokemon.getDefense(),
-                pokemon.getSpecialAttack(),
-                pokemon.getSpecialDefense(),
-                pokemon.getSpeed(),
-                total,
-                pokemon.getHeight(),
-                pokemon.getWeight(),
-                pokemon.getDescription(),
-                pokemon.getSpriteUrl()
-        );
     }
 
     public Long getId() {

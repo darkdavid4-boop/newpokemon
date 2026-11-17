@@ -1,8 +1,8 @@
 package com.pokemon.api.exception;
 
 import com.pokemon.api.dto.ErrorResponse;
+import com.pokemon.api.client.DownstreamServiceException;
 import jakarta.servlet.http.HttpServletRequest;
-import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.FieldError;
@@ -52,16 +52,14 @@ public class GlobalExceptionHandler {
         return new ResponseEntity<>(errorResponse, HttpStatus.CONFLICT);
     }
 
-    @ExceptionHandler(DataIntegrityViolationException.class)
-    public ResponseEntity<ErrorResponse> handleDataIntegrityViolationException(
-            DataIntegrityViolationException ex, HttpServletRequest request) {
-        ErrorResponse errorResponse = new ErrorResponse(
-                HttpStatus.CONFLICT.value(),
-                HttpStatus.CONFLICT.getReasonPhrase(),
-                "No se puede completar la operación por restricciones de integridad (el registro está siendo utilizado por otros elementos).",
-                request.getRequestURI()
-        );
-        return new ResponseEntity<>(errorResponse, HttpStatus.CONFLICT);
+    @ExceptionHandler(DownstreamServiceException.class)
+    public ResponseEntity<ErrorResponse> handleDownstreamServiceException(
+            DownstreamServiceException ex, HttpServletRequest request) {
+        int status = ex.getStatus().value();
+        HttpStatus resolved = HttpStatus.resolve(status);
+        String error = resolved == null ? ex.getStatus().toString() : resolved.getReasonPhrase();
+        ErrorResponse errorResponse = new ErrorResponse(status, error, ex.getMessage(), request.getRequestURI());
+        return ResponseEntity.status(ex.getStatus()).body(errorResponse);
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)

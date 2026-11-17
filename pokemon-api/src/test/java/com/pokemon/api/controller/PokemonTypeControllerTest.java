@@ -1,77 +1,70 @@
 package com.pokemon.api.controller;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.pokemon.api.dto.PokemonTypeRequestDTO;
+import com.pokemon.api.dto.PokemonResponseDTO;
+import com.pokemon.api.dto.PokemonTypeResponseDTO;
+import com.pokemon.api.service.PokemonTypeService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
-import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
+import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 
+import java.util.List;
+import java.util.Set;
+
 import static org.hamcrest.Matchers.*;
+import static org.mockito.Mockito.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
-@SpringBootTest
-@AutoConfigureMockMvc
+@WebMvcTest(PokemonTypeController.class)
 class PokemonTypeControllerTest {
 
     @Autowired
     private MockMvc mockMvc;
 
-    @Autowired
-    private ObjectMapper objectMapper;
+    @MockBean
+    private PokemonTypeService pokemonTypeService;
 
     @Test
-    void shouldReturnAllTypesWithPrimaryAndSecondaryCounts() throws Exception {
-        mockMvc.perform(get("/api/v1/types")
-                        .contentType(MediaType.APPLICATION_JSON))
+    void shouldReturnCountsAlongsideTypeDefinitions() throws Exception {
+        when(pokemonTypeService.getAllTypes()).thenReturn(List.of(
+                new PokemonTypeResponseDTO(1L, "FLYING", "Flying", 132, 10, 122)));
+
+        mockMvc.perform(get("/api/v1/types").accept(MediaType.APPLICATION_JSON))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$", hasSize(greaterThanOrEqualTo(18))))
-                .andExpect(jsonPath("$[?(@.name == 'FLYING')].pokemonCount", hasItem(132)))
-                .andExpect(jsonPath("$[?(@.name == 'FLYING')].primaryCount", hasItem(10)))
-                .andExpect(jsonPath("$[?(@.name == 'FLYING')].secondaryCount", hasItem(122)));
+                .andExpect(jsonPath("$[0].name", is("FLYING")))
+                .andExpect(jsonPath("$[0].pokemonCount", is(132)))
+                .andExpect(jsonPath("$[0].primaryCount", is(10)))
+                .andExpect(jsonPath("$[0].secondaryCount", is(122)));
     }
 
     @Test
-    void shouldReturnPokemonListOfSpecificTypeByNameIncludingSecondary() throws Exception {
-        // El tipo FLYING tiene 10 primarios y 122 secundarios = 132 Pokémon
-        mockMvc.perform(get("/api/v1/types/name/FLYING/pokemon")
-                        .contentType(MediaType.APPLICATION_JSON))
+    void shouldReturnPokemonPageForTypeName() throws Exception {
+        PokemonResponseDTO pokemon = new PokemonResponseDTO(6L, "Charizard", 6, null, 1,
+                "FIRE", "FLYING", Set.of("FIRE", "FLYING"), 78, 84, 78,
+                109, 85, 100, 534, 1.7, 90.5, "Flame Pokémon.", null);
+        when(pokemonTypeService.getPokemonsByTypeName(eq("FLYING"), any()))
+                .thenReturn(new PageImpl<>(List.of(pokemon), PageRequest.of(0, 10), 132));
+
+        mockMvc.perform(get("/api/v1/types/name/FLYING/pokemon"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.totalElements", is(132)))
-                .andExpect(jsonPath("$.content", not(empty())));
+                .andExpect(jsonPath("$.content[0].types", hasItems("FIRE", "FLYING")));
     }
 
     @Test
-    void shouldReturnControlledConflictErrorWhenDeletingAssignedType() throws Exception {
-        // El tipo con ID 1 o FIRE/FLYING está asignado a Pokémon, debe devolver un 409 Conflict controlado
-        mockMvc.perform(delete("/api/v1/types/1")
-                        .contentType(MediaType.APPLICATION_JSON))
+    void shouldReturnControlledConflictWhenDeletingAssignedType() throws Exception {
+        doThrow(new IllegalStateException("No se puede eliminar el tipo 'FLYING' porque está asignado a 132 Pokémon."))
+                .when(pokemonTypeService).deleteType(1L);
+
+        mockMvc.perform(delete("/api/v1/types/1"))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.status", is(409)))
                 .andExpect(jsonPath("$.error", is("Conflict")))
                 .andExpect(jsonPath("$.message", containsString("No se puede eliminar el tipo")));
-    }
-
-    @Test
-    void shouldCreateAndDeleteUnassignedTypeSuccessfully() throws Exception {
-        PokemonTypeRequestDTO newType = new PokemonTypeRequestDTO("COSMIC", "Tipo cósmico del espacio profundo");
-
-        // Crear tipo
-        String response = mockMvc.perform(post("/api/v1/types")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(newType)))
-                .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.name", is("COSMIC")))
-                .andReturn().getResponse().getContentAsString();
-
-        Number id = com.jayway.jsonpath.JsonPath.read(response, "$.id");
-
-        // Eliminar tipo no asignado (debe permitirlo con 204)
-        mockMvc.perform(delete("/api/v1/types/" + id)
-                        .contentType(MediaType.APPLICATION_JSON))
-                .andExpect(status().isNoContent());
     }
 }

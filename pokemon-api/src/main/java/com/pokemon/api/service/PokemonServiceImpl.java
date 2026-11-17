@@ -1,196 +1,133 @@
 package com.pokemon.api.service;
 
+import com.pokemon.api.client.DownstreamServiceException;
+import com.pokemon.api.client.PageResponse;
+import com.pokemon.api.client.PokemonCatalogClient;
+import com.pokemon.api.client.PokemonRecord;
+import com.pokemon.api.client.TypeCatalogClient;
+import com.pokemon.api.client.TypeDefinition;
 import com.pokemon.api.dto.PokemonRequestDTO;
 import com.pokemon.api.dto.PokemonResponseDTO;
-import com.pokemon.api.exception.DuplicateResourceException;
-import com.pokemon.api.exception.ResourceNotFoundException;
-import com.pokemon.api.model.Pokemon;
-import com.pokemon.api.model.PokemonType;
-import com.pokemon.api.repository.PokemonRepository;
-import com.pokemon.api.repository.PokemonTypeRepository;
 import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
-import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 @Service
 public class PokemonServiceImpl implements PokemonService {
 
-    private final PokemonRepository pokemonRepository;
-    private final PokemonTypeRepository pokemonTypeRepository;
+    private final PokemonCatalogClient pokemonCatalog;
+    private final TypeCatalogClient typeCatalog;
 
-    public PokemonServiceImpl(PokemonRepository pokemonRepository,
-                              PokemonTypeRepository pokemonTypeRepository) {
-        this.pokemonRepository = pokemonRepository;
-        this.pokemonTypeRepository = pokemonTypeRepository;
+    public PokemonServiceImpl(PokemonCatalogClient pokemonCatalog, TypeCatalogClient typeCatalog) {
+        this.pokemonCatalog = pokemonCatalog;
+        this.typeCatalog = typeCatalog;
     }
 
     @Override
-    @Transactional(readOnly = true)
     public Page<PokemonResponseDTO> getAllPokemons(String name, String typeName, Pageable pageable) {
-        Page<Pokemon> page = executePokemonQuery(name, typeName, pageable);
-
-        // Si la página solicitada está fuera de rango y existen elementos, devolver la última página disponible
-        if (page.isEmpty() && page.getTotalElements() > 0 && pageable.getPageNumber() >= page.getTotalPages()) {
-            int lastPage = page.getTotalPages() - 1;
-            Pageable fallbackPageable = PageRequest.of(lastPage, pageable.getPageSize(), pageable.getSort());
-            page = executePokemonQuery(name, typeName, fallbackPageable);
+        String typeCode = null;
+        if (typeName != null && !typeName.trim().isEmpty()) {
+            try {
+                typeCode = typeCatalog.findByName(typeName.trim()).code();
+            } catch (DownstreamServiceException exception) {
+                if (exception.getStatus().value() == HttpStatus.NOT_FOUND.value()) {
+                    return Page.empty(pageable);
+                }
+                throw exception;
+            }
         }
-
-        return page.map(PokemonResponseDTO::fromEntity);
-    }
-
-    private Page<Pokemon> executePokemonQuery(String name, String typeName, Pageable pageable) {
-        boolean hasName = name != null && !name.trim().isEmpty();
-        boolean hasType = typeName != null && !typeName.trim().isEmpty();
-
-        if (hasName && hasType) {
-            return pokemonRepository.findByNameContainingIgnoreCaseAndTypeName(name.trim(), typeName.trim(), pageable);
-        } else if (hasName) {
-            return pokemonRepository.findByNameContainingIgnoreCase(name.trim(), pageable);
-        } else if (hasType) {
-            return pokemonRepository.findByTypeName(typeName.trim(), pageable);
-        } else {
-            return pokemonRepository.findAll(pageable);
-        }
+        PageResponse<PokemonRecord> response = pokemonCatalog.findAll(name, typeCode, pageable);
+        Map<String, String> typeNames = typeNamesFor(response.content());
+        List<PokemonResponseDTO> content = response.content().stream()
+                .map(record -> toResponse(record, typeNames))
+                .toList();
+        Pageable responsePageable = PageRequest.of(response.number(), response.size(), pageable.getSort());
+        return new PageImpl<>(content, responsePageable, response.totalElements());
     }
 
     @Override
-    @Transactional(readOnly = true)
     public PokemonResponseDTO getPokemonById(Long id) {
-        Pokemon pokemon = pokemonRepository.findById(id)
-                .orElseThrow(() -> new ResourceNotFoundException("Pokémon no encontrado con el ID: " + id));
-        return PokemonResponseDTO.fromEntity(pokemon);
+        PokemonRecord record = pokemonCatalog.findById(id);
+        return toResponse(record, typeNamesFor(List.of(record)));
     }
 
     @Override
-    @Transactional(readOnly = true)
     public List<PokemonResponseDTO> getPokemonByPokedexNumber(Integer pokedexNumber) {
-        List<Pokemon> pokemons = pokemonRepository.findByPokedexNumber(pokedexNumber);
-        if (pokemons.isEmpty()) {
-            throw new ResourceNotFoundException("Pokémon no encontrado con el número de Pokédex: " + pokedexNumber);
-        }
-        return pokemons.stream().map(PokemonResponseDTO::fromEntity).toList();
+        List<PokemonRecord> records = pokemonCatalog.findByPokedexNumber(pokedexNumber);
+        Map<String, String> typeNames = typeNamesFor(records);
+        return records.stream().map(record -> toResponse(record, typeNames)).toList();
     }
 
     @Override
-    @Transactional(readOnly = true)
     public PokemonResponseDTO getPokemonByName(String name) {
-        Pokemon pokemon = pokemonRepository.findByNameIgnoreCase(name)
-                .orElseThrow(() -> new ResourceNotFoundException("Pokémon no encontrado con el nombre: " + name));
-        return PokemonResponseDTO.fromEntity(pokemon);
+        PokemonRecord record = pokemonCatalog.findByName(name);
+        return toResponse(record, typeNamesFor(List.of(record)));
     }
 
     @Override
-    @Transactional(readOnly = true)
     public PokemonResponseDTO getRandomPokemon() {
-        Pokemon pokemon = pokemonRepository.findRandomPokemon()
-                .orElseThrow(() -> new ResourceNotFoundException("No hay Pokémon registrados en la base de datos"));
-        return PokemonResponseDTO.fromEntity(pokemon);
+        PokemonRecord record = pokemonCatalog.findRandom();
+        return toResponse(record, typeNamesFor(List.of(record)));
     }
 
     @Override
-    @Transactional
-    public PokemonResponseDTO createPokemon(PokemonRequestDTO dto) {
-        if (pokemonRepository.existsByNameIgnoreCase(dto.getName().trim())) {
-            throw new DuplicateResourceException("Ya existe un Pokémon con el nombre: " + dto.getName());
-        }
-
-        List<PokemonType> resolvedTypes = resolveTypes(dto.getTypes());
-
-        Pokemon pokemon = new Pokemon();
-        copyDtoProperties(dto, pokemon);
-        pokemon.setPrimaryType(resolvedTypes.get(0));
-        pokemon.setSecondaryType(resolvedTypes.size() > 1 ? resolvedTypes.get(1) : null);
-
-        Pokemon saved = pokemonRepository.save(pokemon);
-        return PokemonResponseDTO.fromEntity(saved);
+    public PokemonResponseDTO createPokemon(PokemonRequestDTO request) {
+        PokemonRecord record = pokemonCatalog.create(request);
+        return toResponse(record, typeNamesFor(List.of(record)));
     }
 
     @Override
-    @Transactional
-    public PokemonResponseDTO updatePokemon(Long id, PokemonRequestDTO dto) {
-        Pokemon pokemon = pokemonRepository.findById(id)
-                .orElseThrow(() -> new ResourceNotFoundException("Pokémon no encontrado con el ID: " + id));
-
-        // Validar que el nombre no esté en uso por otro Pokémon
-        pokemonRepository.findByNameIgnoreCase(dto.getName().trim())
-                .ifPresent(existing -> {
-                    if (!existing.getId().equals(id)) {
-                        throw new DuplicateResourceException("Ya existe otro Pokémon con el nombre: " + dto.getName());
-                    }
-                });
-
-        List<PokemonType> resolvedTypes = resolveTypes(dto.getTypes());
-
-        copyDtoProperties(dto, pokemon);
-        pokemon.setPrimaryType(resolvedTypes.get(0));
-        pokemon.setSecondaryType(resolvedTypes.size() > 1 ? resolvedTypes.get(1) : null);
-
-        Pokemon updated = pokemonRepository.save(pokemon);
-        return PokemonResponseDTO.fromEntity(updated);
+    public PokemonResponseDTO updatePokemon(Long id, PokemonRequestDTO request) {
+        PokemonRecord record = pokemonCatalog.update(id, request);
+        return toResponse(record, typeNamesFor(List.of(record)));
     }
 
     @Override
-    @Transactional
     public void deletePokemon(Long id) {
-        if (!pokemonRepository.existsById(id)) {
-            throw new ResourceNotFoundException("Pokémon no encontrado con el ID: " + id);
-        }
-        pokemonRepository.deleteById(id);
+        pokemonCatalog.delete(id);
     }
 
-    private List<PokemonType> resolveTypes(Set<String> typeIdentifiers) {
-        if (typeIdentifiers == null || typeIdentifiers.isEmpty()) {
-            throw new IllegalArgumentException("Debe asignar al menos un tipo al Pokémon.");
+    private Map<String, String> typeNamesFor(List<PokemonRecord> records) {
+        Set<String> codes = records.stream()
+                .flatMap(record -> java.util.stream.Stream.of(
+                        record.primaryTypeCode(), record.secondaryTypeCode()))
+                .filter(code -> code != null && !code.isBlank())
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        if (codes.isEmpty()) {
+            return Map.of();
         }
-        if (typeIdentifiers.size() > 2) {
-            throw new IllegalArgumentException("Un Pokémon no puede tener más de 2 tipos.");
-        }
-
-        List<PokemonType> resolved = new ArrayList<>();
-        for (String identifier : typeIdentifiers) {
-            String trimmed = identifier.trim();
-            PokemonType type = null;
-
-            // Intentar buscar por ID si es un número
-            if (trimmed.matches("\\d+")) {
-                Long typeId = Long.parseLong(trimmed);
-                type = pokemonTypeRepository.findById(typeId).orElse(null);
+        Map<String, String> names = typeCatalog.findAll().stream()
+                .collect(Collectors.toMap(TypeDefinition::code, TypeDefinition::name));
+        for (String code : codes) {
+            if (!names.containsKey(code)) {
+                throw new IllegalStateException("Type Catalog no longer contains Pokémon type code: " + code);
             }
-
-            // Si no se encontró por ID, buscar por nombre
-            if (type == null) {
-                type = pokemonTypeRepository.findByNameIgnoreCase(trimmed)
-                        .orElseThrow(() -> new ResourceNotFoundException(
-                                "El tipo de Pokémon '" + trimmed + "' no existe en la base de datos."
-                        ));
-            }
-
-            resolved.add(type);
         }
-        return resolved;
+        return names;
     }
 
-    private void copyDtoProperties(PokemonRequestDTO dto, Pokemon pokemon) {
-        pokemon.setName(dto.getName().trim());
-        pokemon.setPokedexNumber(dto.getPokedexNumber());
-        pokemon.setForm(dto.getForm());
-        pokemon.setGeneration(dto.getGeneration() != null ? dto.getGeneration() : 1);
-        pokemon.setHp(dto.getHp());
-        pokemon.setAttack(dto.getAttack());
-        pokemon.setDefense(dto.getDefense());
-        pokemon.setSpecialAttack(dto.getSpecialAttack());
-        pokemon.setSpecialDefense(dto.getSpecialDefense());
-        pokemon.setSpeed(dto.getSpeed());
-        pokemon.setHeight(dto.getHeight());
-        pokemon.setWeight(dto.getWeight());
-        pokemon.setDescription(dto.getDescription());
-        pokemon.setSpriteUrl(dto.getSpriteUrl());
+    private PokemonResponseDTO toResponse(PokemonRecord record, Map<String, String> typeNames) {
+        String primaryType = typeNames.get(record.primaryTypeCode());
+        String secondaryType = record.secondaryTypeCode() == null
+                ? null : typeNames.get(record.secondaryTypeCode());
+        Set<String> types = new LinkedHashSet<>();
+        types.add(primaryType);
+        if (secondaryType != null) {
+            types.add(secondaryType);
+        }
+        return new PokemonResponseDTO(
+                record.id(), record.name(), record.pokedexNumber(), record.form(), record.generation(),
+                primaryType, secondaryType, types, record.hp(), record.attack(), record.defense(),
+                record.specialAttack(), record.specialDefense(), record.speed(), record.totalStats(),
+                record.height(), record.weight(), record.description(), record.spriteUrl());
     }
 }
